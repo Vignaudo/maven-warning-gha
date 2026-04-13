@@ -73,6 +73,49 @@ describe('buildReviewComments', () => {
     expect(comments).toHaveLength(1);
   });
 
+  it('matches warnings via suffix when workspace prefix differs', () => {
+    // Simulates: Maven outputs /home/runner/work/repo/repo/module/src/...
+    // but normalizeFilePath with wrong workspace falls back to src/...
+    // while PR diff has module/src/...
+    const multiModuleChangedLines = [
+      { file: 'msa-api/src/main/java/com/example/ContentManager.java', startLine: 346, endLine: 346, side: 'RIGHT' as const },
+    ];
+    const warnings: MavenWarning[] = [
+      {
+        file: '/home/runner/work/msa/msa/msa-api/src/main/java/com/example/ContentManager.java',
+        line: 346,
+        message: 'deprecated and marked for removal',
+        severity: 'warning',
+      },
+    ];
+
+    // Workspace matches, so normalizeFilePath strips it correctly
+    const comments = buildReviewComments(warnings, multiModuleChangedLines, '/home/runner/work/msa/msa', true);
+    expect(comments).toHaveLength(1);
+    expect(comments[0].path).toBe('msa-api/src/main/java/com/example/ContentManager.java');
+  });
+
+  it('matches via suffix when workspace does NOT match Maven path', () => {
+    // Simulates: GITHUB_WORKSPACE doesn't match Maven output prefix at all
+    // normalizeFilePath falls back to src/main/... but PR has module/src/main/...
+    const multiModuleChangedLines = [
+      { file: 'msa-api/src/main/java/com/example/ContentManager.java', startLine: 346, endLine: 346, side: 'RIGHT' as const },
+    ];
+    const warnings: MavenWarning[] = [
+      {
+        file: '/some/completely/different/path/msa-api/src/main/java/com/example/ContentManager.java',
+        line: 346,
+        message: 'deprecated and marked for removal',
+        severity: 'warning',
+      },
+    ];
+
+    const comments = buildReviewComments(warnings, multiModuleChangedLines, '/wrong/workspace', true);
+    expect(comments).toHaveLength(1);
+    // Should use the PR file path, not the normalized warning path
+    expect(comments[0].path).toBe('msa-api/src/main/java/com/example/ContentManager.java');
+  });
+
   it('uses error icon for errors', () => {
     const warnings: MavenWarning[] = [
       {

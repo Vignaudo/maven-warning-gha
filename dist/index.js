@@ -29923,14 +29923,48 @@ function wrappy (fn, cb) {
 /***/ }),
 
 /***/ 2069:
-/***/ ((__unused_webpack_module, exports, __nccwpck_require__) => {
+/***/ (function(__unused_webpack_module, exports, __nccwpck_require__) {
 
 "use strict";
 
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
 exports.getChangedLines = getChangedLines;
 exports.buildReviewComments = buildReviewComments;
 exports.postReviewComments = postReviewComments;
+const core = __importStar(__nccwpck_require__(7484));
 const parser_1 = __nccwpck_require__(7196);
 /**
  * Fetches the list of changed line ranges from a PR diff.
@@ -29984,10 +30018,35 @@ async function getChangedLines(octokit, owner, repo, pullNumber) {
     return changedLines;
 }
 /**
+ * Checks if two paths refer to the same file using suffix matching.
+ * This handles cases where Maven outputs absolute paths that don't share
+ * the same prefix as the repo-relative paths from the GitHub API.
+ */
+function pathsMatch(warningPath, prPath) {
+    if (warningPath === prPath)
+        return true;
+    // Check if one ends with the other (suffix match)
+    return (warningPath.endsWith('/' + prPath) ||
+        prPath.endsWith('/' + warningPath));
+}
+/**
+ * Finds the PR file path that matches a warning's file path.
+ * Returns the PR path (needed for the GitHub API) or undefined if no match.
+ */
+function findMatchingPrFile(changedLines, warningPath) {
+    const prFiles = new Set(changedLines.map((cl) => cl.file));
+    for (const prFile of prFiles) {
+        if (pathsMatch(warningPath, prFile)) {
+            return prFile;
+        }
+    }
+    return undefined;
+}
+/**
  * Checks if a given file:line is within changed lines of the PR.
  */
-function isLineChanged(changedLines, file, line) {
-    return changedLines.some((cl) => cl.file === file && line >= cl.startLine && line <= cl.endLine);
+function isLineChanged(changedLines, prFile, line) {
+    return changedLines.some((cl) => cl.file === prFile && line >= cl.startLine && line <= cl.endLine);
 }
 /**
  * Builds review comments from warnings, filtered to only changed lines.
@@ -29995,18 +30054,44 @@ function isLineChanged(changedLines, file, line) {
 function buildReviewComments(warnings, changedLines, workspace, onlyChanged) {
     const comments = [];
     const seen = new Set();
+    const prFiles = [...new Set(changedLines.map((cl) => cl.file))];
+    core.debug(`PR files: ${prFiles.join(', ')}`);
     for (const warning of warnings) {
         const relativePath = (0, parser_1.normalizeFilePath)(warning.file, workspace);
-        if (onlyChanged && !isLineChanged(changedLines, relativePath, warning.line)) {
+        core.debug(`Warning: ${warning.file} -> normalized: ${relativePath}`);
+        // Find the matching PR file path (suffix match)
+        const prFile = findMatchingPrFile(changedLines, relativePath);
+        if (!prFile) {
+            core.debug(`  No matching PR file for: ${relativePath}`);
+            if (onlyChanged)
+                continue;
+            // When not filtering, use the normalized path as-is
+            const key = `${relativePath}:${warning.line}:${warning.message}`;
+            if (seen.has(key))
+                continue;
+            seen.add(key);
+            const icon = warning.severity === 'error' ? '🔴' : '⚠️';
+            comments.push({
+                path: relativePath,
+                line: warning.line,
+                side: 'RIGHT',
+                body: `${icon} **Maven ${warning.severity}**: ${warning.message}`,
+            });
             continue;
         }
-        const key = `${relativePath}:${warning.line}:${warning.message}`;
+        core.debug(`  Matched PR file: ${prFile}`);
+        if (onlyChanged && !isLineChanged(changedLines, prFile, warning.line)) {
+            core.debug(`  Line ${warning.line} not in changed lines, skipping`);
+            continue;
+        }
+        // Use the PR file path (not normalized path) — GitHub API requires it
+        const key = `${prFile}:${warning.line}:${warning.message}`;
         if (seen.has(key))
             continue;
         seen.add(key);
         const icon = warning.severity === 'error' ? '🔴' : '⚠️';
         comments.push({
-            path: relativePath,
+            path: prFile,
             line: warning.line,
             side: 'RIGHT',
             body: `${icon} **Maven ${warning.severity}**: ${warning.message}`,

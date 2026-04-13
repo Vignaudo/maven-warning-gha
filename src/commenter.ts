@@ -1,3 +1,4 @@
+import * as core from '@actions/core';
 import * as github from '@actions/github';
 import { MavenWarning, normalizeFilePath } from './parser';
 
@@ -79,15 +80,46 @@ export async function getChangedLines(
 }
 
 /**
+ * Checks if two paths refer to the same file using suffix matching.
+ * This handles cases where Maven outputs absolute paths that don't share
+ * the same prefix as the repo-relative paths from the GitHub API.
+ */
+function pathsMatch(warningPath: string, prPath: string): boolean {
+  if (warningPath === prPath) return true;
+  // Check if one ends with the other (suffix match)
+  return (
+    warningPath.endsWith('/' + prPath) ||
+    prPath.endsWith('/' + warningPath)
+  );
+}
+
+/**
+ * Finds the PR file path that matches a warning's file path.
+ * Returns the PR path (needed for the GitHub API) or undefined if no match.
+ */
+function findMatchingPrFile(
+  changedLines: ChangedLine[],
+  warningPath: string,
+): string | undefined {
+  const prFiles = new Set(changedLines.map((cl) => cl.file));
+  for (const prFile of prFiles) {
+    if (pathsMatch(warningPath, prFile)) {
+      return prFile;
+    }
+  }
+  return undefined;
+}
+
+/**
  * Checks if a given file:line is within changed lines of the PR.
  */
 function isLineChanged(
   changedLines: ChangedLine[],
-  file: string,
+  prFile: string,
   line: number,
 ): boolean {
   return changedLines.some(
-    (cl) => cl.file === file && line >= cl.startLine && line <= cl.endLine,
+    (cl) => cl.file === prFile && line >= cl.startLine && line <= cl.endLine,
   );
 }
 
@@ -102,21 +134,50 @@ export function buildReviewComments(
 ): ReviewComment[] {
   const comments: ReviewComment[] = [];
   const seen = new Set<string>();
+  const prFiles = [...new Set(changedLines.map((cl) => cl.file))];
+
+  core.debug(`PR files: ${prFiles.join(', ')}`);
 
   for (const warning of warnings) {
     const relativePath = normalizeFilePath(warning.file, workspace);
+    core.debug(`Warning: ${warning.file} -> normalized: ${relativePath}`);
 
-    if (onlyChanged && !isLineChanged(changedLines, relativePath, warning.line)) {
+    // Find the matching PR file path (suffix match)
+    const prFile = findMatchingPrFile(changedLines, relativePath);
+
+    if (!prFile) {
+      core.debug(`  No matching PR file for: ${relativePath}`);
+      if (onlyChanged) continue;
+      // When not filtering, use the normalized path as-is
+      const key = `${relativePath}:${warning.line}:${warning.message}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      const icon = warning.severity === 'error' ? '🔴' : '⚠️';
+      comments.push({
+        path: relativePath,
+        line: warning.line,
+        side: 'RIGHT',
+        body: `${icon} **Maven ${warning.severity}**: ${warning.message}`,
+      });
       continue;
     }
 
-    const key = `${relativePath}:${warning.line}:${warning.message}`;
+    core.debug(`  Matched PR file: ${prFile}`);
+
+    if (onlyChanged && !isLineChanged(changedLines, prFile, warning.line)) {
+      core.debug(`  Line ${warning.line} not in changed lines, skipping`);
+      continue;
+    }
+
+    // Use the PR file path (not normalized path) — GitHub API requires it
+    const key = `${prFile}:${warning.line}:${warning.message}`;
     if (seen.has(key)) continue;
     seen.add(key);
 
     const icon = warning.severity === 'error' ? '🔴' : '⚠️';
     comments.push({
-      path: relativePath,
+      path: prFile,
       line: warning.line,
       side: 'RIGHT',
       body: `${icon} **Maven ${warning.severity}**: ${warning.message}`,
