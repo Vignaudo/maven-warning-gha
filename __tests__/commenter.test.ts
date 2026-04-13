@@ -1,5 +1,61 @@
-import { buildReviewComments } from '../src/commenter';
+import { buildReviewComments, parsePatchHunks } from '../src/commenter';
 import { MavenWarning } from '../src/parser';
+
+describe('parsePatchHunks', () => {
+  it('correctly parses line numbers when hunk header has function context', () => {
+    const patch = [
+      '@@ -343,7 +343,7 @@ public void updateModelVendorData(final RepositoryMetadata metadata, final Strin',
+      '     }',
+      ' ',
+      '     public String getManufacturerData(final String uri) {',
+      '-        RepositoryMetadata manufacturerMetaData = MetadataManager.getInstance().readMetaData(uri);',
+      '+        RepositoryMetadata manufacturerMetaData = MetadataManager.getInstance().readMetaData(uri); // HERE !!!',
+      '         if (!manufacturerMetaData.getMap().isEmpty()) {',
+      '             String manufacturer = manufacturerMetaData.getValue("MANUFACTURER");',
+      '             if (StringUtils.isNotEmpty(manufacturer)) {',
+    ].join('\n');
+
+    const changed = parsePatchHunks('src/main/java/com/ubiqube/api/server/repository/ContentManager.java', patch);
+    expect(changed).toHaveLength(1);
+    expect(changed[0].startLine).toBe(346);
+    expect(changed[0].file).toBe('src/main/java/com/ubiqube/api/server/repository/ContentManager.java');
+  });
+
+  it('correctly parses multiple hunks', () => {
+    const patch = [
+      '@@ -10,6 +10,7 @@ import java.util.List;',
+      ' class Foo {',
+      '     int x;',
+      '+    int y;',
+      '     void method() {}',
+      ' }',
+      '@@ -50,4 +51,5 @@ class Bar {',
+      '     void bar() {',
+      '+        doSomething();',
+      '     }',
+      ' }',
+    ].join('\n');
+
+    const changed = parsePatchHunks('Foo.java', patch);
+    expect(changed).toHaveLength(2);
+    expect(changed[0].startLine).toBe(12);
+    expect(changed[1].startLine).toBe(52);
+  });
+
+  it('handles hunk header without function context', () => {
+    const patch = [
+      '@@ -1,3 +1,4 @@',
+      ' line1',
+      '+added',
+      ' line2',
+      ' line3',
+    ].join('\n');
+
+    const changed = parsePatchHunks('test.txt', patch);
+    expect(changed).toHaveLength(1);
+    expect(changed[0].startLine).toBe(2);
+  });
+});
 
 describe('buildReviewComments', () => {
   const changedLines = [

@@ -29961,11 +29961,55 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", ({ value: true }));
+exports.parsePatchHunks = parsePatchHunks;
 exports.getChangedLines = getChangedLines;
 exports.buildReviewComments = buildReviewComments;
 exports.postReviewComments = postReviewComments;
 const core = __importStar(__nccwpck_require__(7484));
 const parser_1 = __nccwpck_require__(7196);
+/**
+ * Parses a unified diff patch string and extracts the changed (added) line numbers.
+ */
+function parsePatchHunks(filename, patch) {
+    const changedLines = [];
+    const hunkHeaderPattern = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm;
+    let match;
+    while ((match = hunkHeaderPattern.exec(patch)) !== null) {
+        const startLine = parseInt(match[1], 10);
+        // Skip the rest of the @@ header line (optional function context label)
+        const hunkStart = match.index + match[0].length;
+        const headerLineEnd = patch.indexOf('\n', hunkStart);
+        if (headerLineEnd === -1)
+            continue;
+        const contentStart = headerLineEnd + 1;
+        const nextHunk = patch.indexOf('\n@@', contentStart);
+        const hunkBody = patch.slice(contentStart, nextHunk === -1 ? undefined : nextHunk);
+        const hunkLines = hunkBody.split('\n');
+        let currentLine = startLine;
+        for (const hunkLine of hunkLines) {
+            if (hunkLine.startsWith('+')) {
+                changedLines.push({
+                    file: filename,
+                    startLine: currentLine,
+                    endLine: currentLine,
+                    side: 'RIGHT',
+                });
+                currentLine++;
+            }
+            else if (hunkLine.startsWith('-')) {
+                // Removed line — doesn't advance right-side line counter
+            }
+            else if (hunkLine.startsWith('\\')) {
+                // "\ No newline at end of file" — skip
+            }
+            else {
+                // Context line
+                currentLine++;
+            }
+        }
+    }
+    return changedLines;
+}
 /**
  * Fetches the list of changed line ranges from a PR diff.
  */
@@ -29980,40 +30024,7 @@ async function getChangedLines(octokit, owner, repo, pullNumber) {
     for (const file of files) {
         if (!file.patch)
             continue;
-        // Parse the unified diff hunks to find added/modified line ranges
-        const hunkHeaderPattern = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm;
-        let match;
-        while ((match = hunkHeaderPattern.exec(file.patch)) !== null) {
-            const startLine = parseInt(match[1], 10);
-            const lineCount = match[2] ? parseInt(match[2], 10) : 1;
-            // Now parse individual lines within this hunk to find actual additions
-            const hunkStart = match.index + match[0].length;
-            const nextHunk = file.patch.indexOf('\n@@', hunkStart);
-            const hunkBody = file.patch.slice(hunkStart, nextHunk === -1 ? undefined : nextHunk);
-            const hunkLines = hunkBody.split('\n');
-            let currentLine = startLine;
-            for (const hunkLine of hunkLines) {
-                if (hunkLine.startsWith('+')) {
-                    changedLines.push({
-                        file: file.filename,
-                        startLine: currentLine,
-                        endLine: currentLine,
-                        side: 'RIGHT',
-                    });
-                    currentLine++;
-                }
-                else if (hunkLine.startsWith('-')) {
-                    // Removed line — doesn't advance right-side line counter
-                }
-                else if (hunkLine.startsWith('\\')) {
-                    // "\ No newline at end of file" — skip
-                }
-                else {
-                    // Context line
-                    currentLine++;
-                }
-            }
-        }
+        changedLines.push(...parsePatchHunks(file.filename, file.patch));
     }
     return changedLines;
 }

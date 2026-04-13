@@ -13,6 +13,10 @@ interface ReviewComment {
     body: string;
 }
 /**
+ * Parses a unified diff patch string and extracts the changed (added) line numbers.
+ */
+export declare function parsePatchHunks(filename: string, patch: string): ChangedLine[];
+/**
  * Fetches the list of changed line ranges from a PR diff.
  */
 export declare function getChangedLines(octokit: ReturnType<typeof github.getOctokit>, owner: string, repo: string, pullNumber: number): Promise<ChangedLine[]>;
