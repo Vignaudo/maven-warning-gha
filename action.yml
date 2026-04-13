@@ -1,0 +1,27 @@
+name: 'Maven Warning PR Commenter'
+description: 'Parses Maven compiler warnings from build logs and posts inline review comments on PR changed lines'
+author: 'olivier'
+
+inputs:
+  token:
+    description: 'GitHub token for posting review comments'
+    required: false
+    default: ${{ github.token }}
+  log-file:
+    description: 'Path to the Maven build log file. If not set, reads from maven-output input.'
+    required: false
+  maven-output:
+    description: 'Raw Maven build output as a string (alternative to log-file)'
+    required: false
+  only-changed-lines:
+    description: 'Only comment on lines that were changed in the PR (default: true)'
+    required: false
+    default: 'true'
+
+runs:
+  using: 'node20'
+  main: 'dist/index.js'
+
+branding:
+  icon: 'alert-triangle'
+  color: 'yellow'
